@@ -10,7 +10,6 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="QR Beam">
 <meta name="theme-color" content="#0f1b2a">
-
 <script>/* qrcode-generator 1.4.4 (MIT) */
 //---------------------------------------------------------------------
 //
@@ -12488,7 +12487,17 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   .camstatus { position: absolute; left: 10px; right: 10px; top: 10px; font: 12px var(--mono); color: #fff; text-shadow: 0 1px 3px #000; z-index: 2; }
   .rxcard { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 10px; }
   .rxname { font-weight: 600; word-break: break-all; }
-  .strip { width: 100%; height: 26px; display: block; border-radius: 6px; }
+  .strip { width: 100%; height: 30px; display: block; border-radius: 6px; }
+  .send-strip { width: min(100%, 78vh); height: 18px; display: block; margin: 10px auto 0; border-radius: 4px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .rxwhere { font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .rxwhere b { color: var(--ink); }
+  .missing { display: grid; gap: 4px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .missing .list { font: 600 17px var(--mono); color: var(--warn); word-break: break-word; }
+  .missing .hint { font-size: 12px; color: var(--muted); }
+  input.text { width: 100%; font: 14px var(--mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .small { font-size: 12px; color: var(--muted); }
   .rxstats { display: flex; flex-wrap: wrap; gap: 4px 16px; font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
   .rxstats b { color: var(--ink); font-weight: 600; }
   .done { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 12px; }
@@ -12517,6 +12526,7 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
         <canvas id="qr" width="960" height="960" aria-label="Animated QR code"></canvas>
         <div class="empty" id="empty">Choose a file or type some text,<br>then point your phone at this square.</div>
       </div>
+        <canvas class="send-strip" id="sendStrip" height="18" aria-label="Position in the file"></canvas>
         <div class="frame-tick" id="tick"></div>
       </div>
       <div class="panel">
@@ -12539,6 +12549,11 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
           <label for="chunk">Data per code: <output id="chunkOut">700</output> bytes</label>
           <input type="range" id="chunk" min="200" max="1800" step="50" value="700">
         </div>
+        <div class="field">
+          <label for="only">Only send codes</label>
+          <input type="text" class="text" id="only" placeholder="e.g. 34-36, 71   (blank = all)" autocomplete="off">
+          <span class="small" id="onlyInfo">Type the missing numbers your phone shows to resend just those.</span>
+        </div>
         <div class="row"><button type="button" class="btn primary go" id="go" disabled>▶ Start beaming</button><button type="button" class="btn" id="stop" disabled>Stop</button></div>
         <p class="tip">If the phone struggles, lower the speed or the data per code. Bigger codes carry more but need a steadier, closer phone. The file loops, so missed codes get caught next round.</p>
       </div>
@@ -12556,12 +12571,19 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
       </div>
       <div class="rxcard">
         <div class="rxname" id="rxName">Waiting for a QR Beam code…</div>
-        <canvas class="strip" id="strip" height="26"></canvas>
+        <canvas class="strip" id="strip" height="30" aria-label="Received codes"></canvas>
+        <div class="legend"><span><i style="background:var(--accent)"></i>Received</span><span><i style="background:var(--warn)"></i>Missed</span><span><i style="background:var(--cell);border:1px solid var(--line)"></i>Not sent yet</span><span><i style="background:var(--ink);width:3px"></i>Now</span></div>
+        <div class="rxwhere" id="rxWhere"></div>
         <div class="rxstats">
           <span><b id="rxCount">0</b> / <span id="rxTotal">0</span> codes</span>
           <span><b id="rxPct">0</b>%</span>
           <span id="rxRate">– KB/s</span>
           <span id="rxEta"></span>
+        </div>
+        <div class="missing" id="missing" hidden>
+          <span class="label">Missing codes</span>
+          <span class="list" id="missingList"></span>
+          <span class="hint">Type these into “Only send codes” on the computer to resend just the gaps.</span>
         </div>
       </div>
       <div class="done" id="done" hidden>
@@ -12633,7 +12655,7 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   function startJob(bytes, name, type) {
     src = { bytes, name, type };
     job = buildJob(bytes, name, type, chunkSize());
-    tickN = 0; dataPtr = 1;
+    tickN = 0; dataPtr = 1; onlyPtr = 0; curIdx = 0; parseOnly();
     $("now").hidden = false; $("go").disabled = false; $("stop").disabled = false;
     if (!running) { $("go").textContent = "▶ Start beaming"; $("empty").hidden = false; $("empty").innerHTML = "<span><b>Ready.</b><br>Press <b>Start beaming</b> (or Space),<br>then point your phone at this square.</span>"; $("tick").textContent = ""; }
     $("nowName").textContent = name;
@@ -12645,12 +12667,49 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     const loopFrames = job.n + Math.ceil(job.n / (META_EVERY - 1));
     $("nowMeta").textContent = `${fmtSize(job.size)} · ${job.total} codes · one loop ≈ ${fmtTime(loopFrames / fps())} · ~${(fps() * job.chunk / 1024).toFixed(1)} KB/s max`;
   }
+  let only = null, onlyPtr = 0, curIdx = 0;
+  function parseRanges(str, n) {
+    const set = new Set();
+    str.split(/[,\s]+/).forEach(tok => {
+      const m = tok.match(/^(\d+)(?:[-–](\d+))?$/);
+      if (!m) return;
+      let a = +m[1], b = m[2] ? +m[2] : a;
+      if (a > b) [a, b] = [b, a];
+      for (let i = Math.max(1, a); i <= Math.min(n, b); i++) set.add(i);
+    });
+    return [...set].sort((x, y) => x - y);
+  }
+  function parseOnly() {
+    const v = $("only").value.trim();
+    if (!job || !v) { only = null; $("onlyInfo").textContent = "Type the missing numbers your phone shows to resend just those."; drawSendStrip(); return; }
+    const list = parseRanges(v, job.n);
+    only = list.length ? list : null; onlyPtr = 0;
+    $("onlyInfo").textContent = only ? `Sending ${only.length} of ${job.n} codes on repeat.` : "No valid numbers yet. Example: 34-36, 71";
+    drawSendStrip();
+  }
+  $("only").addEventListener("input", parseOnly);
+  function drawSendStrip() {
+    const cv = $("sendStrip"), dpr = Math.min(devicePixelRatio || 1, 2);
+    const W = Math.max(1, Math.round(cv.clientWidth * dpr)), H = Math.round(18 * dpr);
+    if (cv.width !== W) { cv.width = W; cv.height = H; }
+    const c = cv.getContext("2d"), cs = getComputedStyle(document.documentElement);
+    c.fillStyle = cs.getPropertyValue("--cell").trim(); c.fillRect(0, 0, W, H);
+    if (!job) return;
+    const n = job.n, w = W / n;
+    c.fillStyle = cs.getPropertyValue(only ? "--warn" : "--accent").trim();
+    c.globalAlpha = 0.35;
+    if (only) only.forEach(i => c.fillRect((i - 1) * w, 0, Math.max(w, 1), H)); else c.fillRect(0, 0, W, H);
+    c.globalAlpha = 1;
+    if (curIdx) { c.fillStyle = cs.getPropertyValue("--ink").trim(); c.fillRect(Math.min(W - 3 * dpr, (curIdx - 0.5) * w - dpr), 0, 3 * dpr, H); }
+  }
   function showNext() {
     if (!job) return;
     let idx;
     if (tickN % META_EVERY === 0) idx = 0;
+    else if (only) { idx = only[onlyPtr % only.length]; onlyPtr++; }
     else { idx = dataPtr; dataPtr = dataPtr % job.n + 1; }
     tickN++;
+    if (idx) { curIdx = idx; drawSendStrip(); }
     const m = drawQR(qrCanvas, job.frame(idx));
     $("tick").textContent = idx === 0 ? `header · ${m}×${m}` : `code ${idx} / ${job.n} · ${m}×${m}`;
   }
@@ -12745,13 +12804,15 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     const id = get32(b, 2), idx = get32(b, 6), total = get32(b, 10);
     if (!total || idx >= total) return;
     if (!rx || rx.id !== id) {
-      rx = { id, total, chunks: new Array(total), got: 0, bytes: 0, meta: null, start: performance.now(), done: false };
+      rx = { id, total, chunks: new Array(total), got: 0, bytes: 0, meta: null, start: performance.now(), done: false, lastIdx: 0, looped: false };
       $("rxTotal").textContent = total - 1; $("rxName").textContent = "Receiving…";
     }
     if (idx === 0) {
       if (!rx.meta) { try { rx.meta = JSON.parse(new TextDecoder().decode(b.subarray(HDR))); $("rxName").textContent = `${rx.meta.n} · ${fmtSize(rx.meta.s)}`; } catch {} }
-    } else if (!rx.chunks[idx]) {
-      rx.chunks[idx] = b.slice(HDR); rx.got++; rx.bytes += b.length - HDR;
+    } else {
+      if (rx.lastIdx && idx < rx.lastIdx - 2) rx.looped = true;
+      rx.lastIdx = idx;
+      if (!rx.chunks[idx]) { rx.chunks[idx] = b.slice(HDR); rx.got++; rx.bytes += b.length - HDR; }
     }
     const now = performance.now();
     if (now - lastUi > 150 || rx.got === rx.total - 1) { lastUi = now; updateRxUi(); }
@@ -12767,6 +12828,19 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     const avg = rx.got ? rx.bytes / rx.got : 0;
     $("rxEta").textContent = rx.got && rx.got < n ? "≈ " + fmtTime((n - rx.got) * avg / rate) + " left" : "";
     if (rx.got) $("camStatus").textContent = "Receiving…";
+    const missing = [];
+    for (let i = 1; i <= n; i++) if (!rx.chunks[i] && (rx.looped || i < rx.lastIdx)) missing.push(i);
+    $("rxWhere").innerHTML = rx.lastIdx ? `Now at <b>#${rx.lastIdx}</b> of ${n}` + (rx.looped ? " · catching up on missed codes" : " · first pass") : "";
+    if (missing.length && !rx.done) {
+      const ranges = [];
+      for (let k = 0; k < missing.length; k++) {
+        let a = missing[k], b = a;
+        while (missing[k + 1] === b + 1) { b = missing[++k]; }
+        ranges.push(a === b ? `${a}` : `${a}-${b}`);
+      }
+      $("missingList").textContent = ranges.slice(0, 12).join(", ") + (ranges.length > 12 ? `  +${ranges.length - 12} more` : "") + `  (${missing.length} codes)`;
+      $("missing").hidden = false;
+    } else $("missing").hidden = true;
     drawStrip();
   }
   function drawStrip() {
@@ -12776,9 +12850,17 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     const c = cv.getContext("2d"), cs = getComputedStyle(document.documentElement);
     c.fillStyle = cs.getPropertyValue("--cell").trim(); c.fillRect(0, 0, W, H);
     if (!rx) return;
-    const n = rx.total - 1, w = W / n;
-    c.fillStyle = cs.getPropertyValue("--accent").trim();
-    for (let i = 1; i <= n; i++) if (rx.chunks[i]) c.fillRect((i - 1) * w, 0, Math.max(w, 1), H);
+    const n = rx.total - 1, w = W / n, acc = cs.getPropertyValue("--accent").trim(), warn = cs.getPropertyValue("--warn").trim();
+    for (let i = 1; i <= n; i++) {
+      if (rx.chunks[i]) c.fillStyle = acc;
+      else if (rx.looped || i < rx.lastIdx) c.fillStyle = warn;
+      else continue;
+      c.fillRect((i - 1) * w, 0, Math.max(w, 1), H);
+    }
+    if (rx.lastIdx && !rx.done) {
+      const x = Math.min(W - 3 * dpr, Math.max(0, (rx.lastIdx - 0.5) * w - dpr));
+      c.fillStyle = cs.getPropertyValue("--ink").trim(); c.fillRect(x, 0, 3 * dpr, H);
+    }
   }
 
   let outFile = null, outText = null, outUrl = null;
@@ -12820,7 +12902,7 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     setTimeout(() => $("copy").textContent = "Copy text", 1500);
   };
   $("again").onclick = () => {
-    rx = null; outFile = null; $("done").hidden = true; $("rxName").textContent = "Waiting for a QR Beam code…";
+    rx = null; outFile = null; $("done").hidden = true; $("missing").hidden = true; $("rxWhere").textContent = ""; $("rxName").textContent = "Waiting for a QR Beam code…";
     $("rxCount").textContent = "0"; $("rxTotal").textContent = "0"; $("rxPct").textContent = "0"; $("rxRate").textContent = "– KB/s"; $("rxEta").textContent = "";
     drawStrip(); startCamera();
   };
@@ -12829,7 +12911,6 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   window.__beam = { buildJob, drawQR, handleBytes, state: () => rx, crc32 };
 })();
 </script>
-
 <script>
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
