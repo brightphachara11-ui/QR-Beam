@@ -45,7 +45,9 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   h1 .mark { width: 22px; height: 22px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
   h1 .mark i { background: var(--ink); border-radius: 1px; }
   h1 .mark i:nth-child(2), h1 .mark i:nth-child(4), h1 .mark i:nth-child(9) { background: var(--accent); }
-  h1 .ver { font: 500 12px var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+  h1 .ver { font: 600 13px var(--mono); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+  h1 .ver.ok { border-color: var(--ok); color: var(--ok); }
+  h1 .ver.old { border-color: var(--warn); color: var(--warn); }
   .tabs, .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
   .tabs button, .seg button { font: 500 14px var(--sans); color: var(--muted); background: none; border: 0; border-radius: 7px; padding: 7px 14px; cursor: pointer; }
   .tabs button[aria-pressed="true"], .seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
@@ -122,7 +124,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
 <body>
 <div class="wrap">
   <header>
-    <h1><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>QR Beam <span class="ver">v6</span></h1>
+    <h1><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>QR Beam <button type="button" class="ver" id="ver" title="App version">v7</button></h1>
     <div class="tabs" role="group" aria-label="Mode">
       <button type="button" id="tabSend" aria-pressed="true">Send (computer)</button>
       <button type="button" id="tabRecv" aria-pressed="false">Receive (phone)</button>
@@ -697,6 +699,34 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     setGuide(1); drawStrip(); startCamera();
   };
   drawStrip();
+
+  // ================= version check =================
+  const APP_VERSION = 7, VERSION_URL = "https://brightphachara11-ui.github.io/QR-Beam/version.json";
+  const verEl = $("ver");
+  let latest = null;
+  async function checkVersion() {
+    verEl.className = "ver"; verEl.textContent = `v${APP_VERSION} · checking…`;
+    try {
+      const r = await fetch(VERSION_URL + "?t=" + Date.now(), { cache: "no-store" });
+      latest = (await r.json()).v;
+      if (latest > APP_VERSION) { verEl.className = "ver old"; verEl.textContent = `v${APP_VERSION} · v${latest} available — tap to update`; }
+      else { verEl.className = "ver ok"; verEl.textContent = `v${APP_VERSION} ✓ up to date`; }
+    } catch { verEl.textContent = `v${APP_VERSION} · offline`; }
+  }
+  verEl.onclick = async () => {
+    if (latest > APP_VERSION) {
+      if (location.protocol === "https:") {
+        verEl.textContent = "Updating…";
+        try { const reg = await navigator.serviceWorker?.getRegistration(); await reg?.update(); } catch {}
+        location.reload();
+      } else {
+        verEl.textContent = "Get the new PC file from the web link";
+        window.open("https://brightphachara11-ui.github.io/QR-Beam/", "_blank");
+      }
+    } else checkVersion();
+  };
+  checkVersion();
+  addEventListener("online", checkVersion);
 
   window.__beam = { handleBytes, state: () => rx, scanSource, crc32, Decoder, coeffs, job: () => job, showNext, pending: () => inflight, workers: () => workers.length };
 })();
