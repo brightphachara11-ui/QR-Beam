@@ -124,7 +124,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
 <body>
 <div class="wrap">
   <header>
-    <h1><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>QR Beam <button type="button" class="ver" id="ver" title="App version">v7</button></h1>
+    <h1><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>QR Beam <button type="button" class="ver" id="ver" title="App version">v8</button></h1>
     <div class="tabs" role="group" aria-label="Mode">
       <button type="button" id="tabSend" aria-pressed="true">Send (computer)</button>
       <button type="button" id="tabRecv" aria-pressed="false">Receive (phone)</button>
@@ -422,7 +422,11 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   $("slotSeg").querySelectorAll("button").forEach(b => b.onclick = () => {
     slots = +b.dataset.n;
     $("slotSeg").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b));
-    layoutCanvas(); updateSendMeta();
+    // smaller codes on a crowded screen: fewer squares each, so they stay readable
+    const auto = { 1: 600, 2: 500, 4: 400 }[slots];
+    $("chunk").value = auto; $("chunkOut").textContent = auto;
+    layoutCanvas();
+    if (raw && !running) prepare(raw.bytes, raw.name, raw.type); else updateSendMeta();
     if (running) showNext();
   });
   addEventListener("keydown", e => {
@@ -496,7 +500,8 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   const video = $("video"), scan = document.createElement("canvas");
   const sctx = scan.getContext("2d", { willReadFrequently: true });
   let stream = null, scanning = false, rx = null, lastUi = 0, lastHit = 0, layoutGuess = 0, tryIdx = 0;
-  let codesSeen = 0, codesT = performance.now(), codesRate = 0;
+  let codesSeen = 0, codesT = performance.now(), codesRate = 0, camInfo = "", scanTurn = 0;
+  const winHot = {};
 
   // Background scanners (Web Workers) so the camera never waits for decoding.
   const workers = [], pending = new Map(); let jobId = 0, inflight = 0;
@@ -514,7 +519,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       const n = Math.max(2, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
       for (let i = 0; i < n; i++) {
         const w = new Worker(url);
-        w.onmessage = e => { inflight--; pending.delete(e.data.id); if (e.data.bytes) gotCode(e.data.bytes); };
+        w.onmessage = e => { inflight--; const win = pending.get(e.data.id); pending.delete(e.data.id); if (e.data.bytes) { winHot[win] = performance.now(); gotCode(e.data.bytes); } };
         w.onerror = () => { inflight--; };
         workers.push(w);
       }
@@ -523,12 +528,19 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
 
   function gotCode(bytes) { lastHit = performance.now(); codesSeen++; handleBytes(bytes); }
 
+  // Overlapping search windows: each code is fully inside at least one window even when
+  // the grid isn't lined up with the frame, or is smaller/larger than it.
   function regionsFor(layout, RW, RH) {
     if (layout === 1) return [[0, 0, RW, RH]];
-    const o = 0.06;
-    if (layout === 2) { const h = RW / 2, e = h * o; return [[0, 0, h + e, RH], [h - e, 0, h + e, RH]]; }
-    const h = RW / 2, e = h * o;
-    return [[0, 0, h + e, h + e], [h - e, 0, h + e, h + e], [0, h - e, h + e, h + e], [h - e, h - e, h + e, h + e]];
+    const out = [];
+    if (layout === 2) {
+      const w = Math.min(RW, RH * 1.3), xs = [0, (RW - w) / 2, RW - w];
+      for (const x of xs) out.push([x, 0, w, RH]);
+      return out;
+    }
+    const w = RW * 0.62, st = [0, (RW - w) / 2, RW - w];
+    for (const y of st) for (const x of st) out.push([x, y, w, w]);
+    return out;
   }
   function currentLayout() {
     if (rx?.layout && performance.now() - lastHit < 1500) return rx.layout;
@@ -546,18 +558,26 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     const S = Math.min(vw, vh) * 0.9;
     const RW = S, RH = layout === 2 ? S / 2 : S;
     const sx = (vw - RW) / 2, sy = (vh - RH) / 2;
-    const maxSide = layout === 1 ? 900 : 720;
-    for (const [x, y, w, h] of regionsFor(layout, RW, RH)) {
+    const maxSide = layout === 1 ? 900 : 640;
+    const regs = regionsFor(layout, RW, RH), now = performance.now();
+    // Focus on windows that found a code recently; also try one other window each frame to discover new ones.
+    const hotKey = layout + ":", hot = regs.map((_, i) => now - (winHot[hotKey + i] || 0) < 700);
+    let pick = regs.map((r, i) => i).filter(i => hot[i]);
+    if (pick.length < regs.length) { const cold = regs.map((r, i) => i).filter(i => !hot[i]); pick.push(cold[scanTurn++ % cold.length]); }
+    if (!hot.some(Boolean)) pick = regs.map((r, i) => i);
+    for (const i of pick) {
+      const [x, y, w, h] = regs[i], win = hotKey + i;
       const k = Math.min(1, maxSide / Math.max(w, h)), tw = Math.round(w * k), th = Math.round(h * k);
       if (scan.width !== tw || scan.height !== th) { scan.width = tw; scan.height = th; }
       sctx.drawImage(src, sx + x, sy + y, w, h, 0, 0, tw, th);
       const img = sctx.getImageData(0, 0, tw, th);
       if (workers.length) {
         const id = ++jobId; inflight++; pending.set(id, 1);
+        pending.set(id, win);
         workers[id % workers.length].postMessage({ id, buf: img.data.buffer, w: tw, h: th }, [img.data.buffer]);
       } else {
         const r = jsQR(img.data, tw, th, { inversionAttempts: "dontInvert" });
-        if (r) gotCode(Uint8Array.from(r.binaryData));
+        if (r) { winHot[win] = performance.now(); gotCode(Uint8Array.from(r.binaryData)); }
       }
     }
   }
@@ -568,9 +588,18 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("no-camera-api");
       stream = await navigator.mediaDevices.getUserMedia({ audio: false,
-        video: { facingMode: "environment", width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 60 } } });
+        video: { facingMode: "environment", width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } } });
+      const track = stream.getVideoTracks()[0];
+      try {
+        const caps = track.getCapabilities ? track.getCapabilities() : {};
+        const wMax = caps.width?.max, hMax = caps.height?.max;
+        if (wMax && hMax) await track.applyConstraints({ width: { ideal: wMax }, height: { ideal: hMax }, frameRate: { ideal: 30 } });
+      } catch {}
       video.srcObject = stream; await video.play();
-      scanning = true; $("camStatus").textContent = "Scanning…";
+      scanning = true;
+      const st = stream.getVideoTracks()[0].getSettings();
+      camInfo = `${Math.max(st.width || video.videoWidth, st.height || video.videoHeight)}×${Math.min(st.width || video.videoWidth, st.height || video.videoHeight)}${st.frameRate ? " @" + Math.round(st.frameRate) : ""}`;
+      $("camStatus").textContent = "Scanning… · camera " + camInfo;
       navigator.wakeLock?.request("screen").catch(() => {});
       requestAnimationFrame(scanLoop);
     } catch (e) {
@@ -588,7 +617,10 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     if (inflight === 0 && video.videoWidth) scanSource(video, video.videoWidth, video.videoHeight);
     $("cam").classList.toggle("hit", performance.now() - lastHit < 250);
     const now = performance.now();
-    if (now - codesT > 1000) { codesRate = codesSeen * 1000 / (now - codesT); codesSeen = 0; codesT = now; $("rxScan").textContent = codesRate.toFixed(1) + " codes/s"; if (!rx) $("camStatus").textContent = "Scanning…"; }
+    if (now - codesT > 1000) { codesRate = codesSeen * 1000 / (now - codesT); codesSeen = 0; codesT = now; $("rxScan").textContent = codesRate.toFixed(1) + " codes/s";
+      const quiet = now - lastHit > 2000;
+      $("camStatus").textContent = (quiet ? "No code in view — move closer, fill the frame" : rx ? "Receiving…" : "Scanning…") + ` · camera ${camInfo} · ${codesRate.toFixed(1)} codes/s`;
+    }
     requestAnimationFrame(scanLoop);
   }
 
@@ -631,7 +663,6 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       $("needBadge").innerHTML = firstPass && rx.maxSeq <= K ? `First pass: <b>${rank}</b> / ${K}` : `Need <b>${need}</b> more code${need === 1 ? "" : "s"} · any will do`;
       $("needBadge").hidden = false;
     } else $("needBadge").hidden = true;
-    $("camStatus").textContent = "Receiving…";
     drawStrip();
   }
   function drawStrip() {
@@ -701,7 +732,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   drawStrip();
 
   // ================= version check =================
-  const APP_VERSION = 7, VERSION_URL = "https://brightphachara11-ui.github.io/QR-Beam/version.json";
+  const APP_VERSION = 8, VERSION_URL = "https://brightphachara11-ui.github.io/QR-Beam/version.json";
   const verEl = $("ver");
   let latest = null;
   async function checkVersion() {
