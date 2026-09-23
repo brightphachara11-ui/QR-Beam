@@ -124,7 +124,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
 <body>
 <div class="wrap">
   <header>
-    <h1><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>QR Beam <button type="button" class="ver" id="ver" title="App version">v8</button></h1>
+    <h1><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>QR Beam <button type="button" class="ver" id="ver" title="App version">v9</button></h1>
     <div class="tabs" role="group" aria-label="Mode">
       <button type="button" id="tabSend" aria-pressed="true">Send (computer)</button>
       <button type="button" id="tabRecv" aria-pressed="false">Receive (phone)</button>
@@ -197,7 +197,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       <div class="rxcard">
         <div class="rxname" id="rxName">Waiting for a QR Beam code…</div>
         <canvas class="strip" id="strip" height="30" aria-label="Received parts"></canvas>
-        <div class="legend"><span><i style="background:var(--accent)"></i>Received</span><span><i style="background:var(--warn)"></i>Missed (repair codes will fill it)</span><span><i style="background:var(--cell);border:1px solid var(--line)"></i>Not sent yet</span><span><i style="background:var(--ink);width:3px"></i>Now</span></div>
+        <div class="legend"><span><i style="background:var(--accent)"></i>Received</span><span><i style="background:var(--warn)"></i>Missed</span><span><i style="background:var(--ok)"></i>Filled by repair codes</span><span><i style="background:var(--cell);border:1px solid var(--line)"></i>Not sent yet</span><span><i style="background:var(--ink);width:3px"></i>Now</span></div>
         <div class="rxwhere" id="rxWhere"></div>
         <div class="rxstats">
           <span><b id="rxPct">0</b>%</span>
@@ -449,6 +449,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
 
   // ================= RECEIVER: decoder =================
   // Gaussian elimination over GF(2). First-pass codes are single blocks; repair codes are XOR mixes.
+  const unitCount = d => { if (d._uc === undefined || d._ucRank !== d.rank) { let n = 0; for (let i = 0; i < d.K; i++) n += d.unit[i]; d._uc = n; d._ucRank = d.rank; } return d._uc; };
   class Decoder {
     constructor(id, K, B) {
       this.id = id; this.K = K; this.B = B; this.W = B >> 2; this.KW = Math.ceil(K / 32);
@@ -658,7 +659,8 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     const perSec = rank / Math.max(el, 0.5);
     $("rxEta").textContent = need > 0 && rank ? "≈ " + fmtTime(need * 1.05 / perSec) + " left" : "";
     const firstPass = rx.lastSeq && rx.lastSeq <= K;
-    $("rxWhere").innerHTML = rx.lastSeq ? (firstPass ? `Now at <b>#${rx.lastSeq}</b> of ${K} · first pass` : `First pass done · <b>repair codes</b> now filling gaps`) : "";
+    const units = rx.dec ? unitCount(rx.dec) : 0, gaps = K - units, filledGaps = rank - units;
+    $("rxWhere").innerHTML = rx.lastSeq ? (firstPass ? `Now at <b>#${rx.lastSeq}</b> of ${K} · first pass` : `First pass done · repair codes filled <b>${filledGaps}</b> of ${gaps} gaps`) : "";
     if (need > 0 && rank) {
       $("needBadge").innerHTML = firstPass && rx.maxSeq <= K ? `First pass: <b>${rank}</b> / ${K}` : `Need <b>${need}</b> more code${need === 1 ? "" : "s"} · any will do`;
       $("needBadge").hidden = false;
@@ -672,11 +674,16 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     const c = cv.getContext("2d");
     c.fillStyle = cssVar("--cell"); c.fillRect(0, 0, W, H);
     if (!rx) return;
-    const K = rx.K, w = W / K, acc = cssVar("--accent"), warn = cssVar("--warn"), dec = rx.dec;
+    const K = rx.K, w = W / K, acc = cssVar("--accent"), warn = cssVar("--warn"), ok = cssVar("--ok"), dec = rx.dec;
     const reach = rx.maxSeq > K ? K : rx.maxSeq;
+    // Each useful repair code fills exactly one gap. Which gap is only known at the very end,
+    // so gaps are shown filling in order, one per useful repair code.
+    let filled = dec ? dec.rank - unitCount(dec) : 0;
     for (let i = 0; i < K; i++) {
-      const got = dec && dec.piv[i] && (dec.unit[i] || rx.done);
-      if (got) c.fillStyle = acc; else if (i < reach) c.fillStyle = warn; else continue;
+      const direct = dec && dec.unit[i];
+      if (direct || rx.done) c.fillStyle = acc;
+      else if (i < reach) { if (filled > 0) { c.fillStyle = ok; filled--; } else c.fillStyle = warn; }
+      else continue;
       c.fillRect(i * w, 0, Math.max(w, 1), H);
     }
     if (rx.lastSeq && rx.lastSeq <= K && !rx.done) {
@@ -732,7 +739,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   drawStrip();
 
   // ================= version check =================
-  const APP_VERSION = 8, VERSION_URL = "https://brightphachara11-ui.github.io/QR-Beam/version.json";
+  const APP_VERSION = 9, VERSION_URL = "https://brightphachara11-ui.github.io/QR-Beam/version.json";
   const verEl = $("ver");
   let latest = null;
   async function checkVersion() {
