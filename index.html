@@ -124,7 +124,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
 <body>
 <div class="wrap">
   <header>
-    <h1><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>QR Beam <button type="button" class="ver" id="ver" title="App version">v9</button></h1>
+    <h1><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>QR Beam <button type="button" class="ver" id="ver" title="App version">v10</button></h1>
     <div class="tabs" role="group" aria-label="Mode">
       <button type="button" id="tabSend" aria-pressed="true">Send (computer)</button>
       <button type="button" id="tabRecv" aria-pressed="false">Receive (phone)</button>
@@ -500,6 +500,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   // ================= RECEIVER: camera + scanning =================
   const video = $("video"), scan = document.createElement("canvas");
   const sctx = scan.getContext("2d", { willReadFrequently: true });
+  let lastLayout = 0;
   let stream = null, scanning = false, rx = null, lastUi = 0, lastHit = 0, layoutGuess = 0, tryIdx = 0;
   let codesSeen = 0, codesT = performance.now(), codesRate = 0, camInfo = "", scanTurn = 0;
   const winHot = {};
@@ -543,9 +544,15 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     for (const y of st) for (const x of st) out.push([x, y, w, w]);
     return out;
   }
+  // Use the layout the sender announces in every code. Only when nothing has been read for a while
+  // (or nothing yet) occasionally try the other layouts, so switching 1/2/4 on the PC still works.
+  let probeTick = 0;
   function currentLayout() {
-    if (rx?.layout && performance.now() - lastHit < 1500) return rx.layout;
-    return [1, 4, 2][tryIdx++ % 3];
+    const known = rx?.layout || lastLayout;
+    const idle = performance.now() - lastHit > 3000;
+    if (!known) return [1, 4, 2][probeTick++ % 3];
+    if (idle && ++probeTick % 6 === 0) { const others = [1, 2, 4].filter(l => l !== known); return others[(probeTick / 6) % 2 | 0]; }
+    return known;
   }
   function setGuide(layout) {
     const g = $("guide");
@@ -589,13 +596,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("no-camera-api");
       stream = await navigator.mediaDevices.getUserMedia({ audio: false,
-        video: { facingMode: "environment", width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } } });
-      const track = stream.getVideoTracks()[0];
-      try {
-        const caps = track.getCapabilities ? track.getCapabilities() : {};
-        const wMax = caps.width?.max, hMax = caps.height?.max;
-        if (wMax && hMax) await track.applyConstraints({ width: { ideal: wMax }, height: { ideal: hMax }, frameRate: { ideal: 30 } });
-      } catch {}
+        video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } } });
       video.srcObject = stream; await video.play();
       scanning = true;
       const st = stream.getVideoTracks()[0].getSettings();
@@ -636,6 +637,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       $("rxName").textContent = "Receiving…";
     }
     rx.layout = [1, 2, 4].includes(layout) ? layout : 1;
+    lastLayout = rx.layout;
     const payload = b.subarray(HDR);
     if (seq === 0) {
       if (!rx.meta) { try { rx.meta = JSON.parse(new TextDecoder().decode(payload)); $("rxName").textContent = `${rx.meta.n} · ${fmtSize(rx.meta.s)}`; } catch {} }
@@ -739,7 +741,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   drawStrip();
 
   // ================= version check =================
-  const APP_VERSION = 9, VERSION_URL = "https://brightphachara11-ui.github.io/QR-Beam/version.json";
+  const APP_VERSION = 10, VERSION_URL = "https://brightphachara11-ui.github.io/QR-Beam/version.json";
   const verEl = $("ver");
   let latest = null;
   async function checkVersion() {
