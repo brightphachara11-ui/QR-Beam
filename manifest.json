@@ -1,0 +1,9 @@
+{
+  "name": "QR Beam",
+  "short_name": "QR Beam",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0f1b2a",
+  "theme_color": "#0f1b2a",
+  "icons": [{ "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }]
+}
